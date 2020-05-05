@@ -1,0 +1,151 @@
+---
+title: "Using rvest and dplyr to scrape data and look at aviation incidents"
+author: "David Zimmermann"
+date: 2015-04-30
+categories: ["R"]
+tags: ["dplyr", "rvest", "web-scraping", "aviation", "R"]
+---
+```{r, include=FALSE}
+options(width=79)
+```
+
+
+For a project I recently faced the issue of getting a database of all aviation incidents. As I really wanted to try Hadley's new `rvest`-package, I thought I will give it a try and share the code with you.
+
+The data of aviation incidents starting in 1919 from the Aviation Safety Network can be found here: [Aviation Safety Network](http://aviation-safety.net/database/)
+
+
+First, we needed to install and load the `rvest`-package, as well as `dplyr`, which I love for removing lots of messy code (if you are unfamiliar with the `piping`-operator `%>%` have a look at this description: [Introduction to Piping in R](http://www.r-statistics.com/2014/08/simpler-r-coding-with-pipes-the-present-and-future-of-the-magrittr-package/)
+
+```{r}
+# install.packages("rvest")
+# install.packages("dplyr")
+library(rvest)
+library(dplyr)
+```
+
+Let's try out some functions of `rvest`.
+
+Say we want to read all incidents that happened in the year 1920: [Aviation Incidents 1920](http://aviation-safety.net/database/dblist.php?Year=1920). We need to find the right html table to download and the link to it, to be more precise, the XPath. This can be done by using "inspect element" (right-click on the table, inspect element, right click on the element in the code and "copy XPath"). In our case the XPath is
+`"//*[@id="contentcolumnfull"]/div/table"`.
+To load the html data to R we can use:
+
+```{r}
+url <- "http://aviation-safety.net/database/dblist.php?Year=1920"
+
+# load the html code to R
+incidents1920 <- url %>% read_html() 
+
+# filter for the right xpath node
+incidents1920 <- incidents1920 %>% 
+  html_nodes(xpath = '//*[@id="contentcolumnfull"]/div/table') 
+
+# convert to a data.frame
+incidents1920 <- incidents1920 %>% html_table() %>% data.frame()
+
+# or in one go
+incidents1920 <- url %>% read_html() %>% 
+  html_nodes(xpath = '//*[@id="contentcolumnfull"]/div/table') %>% 
+  html_table() %>% data.frame()
+```
+
+Which gives us a small data.frame of 4 accidents.
+
+But what happens if we have more than one page of data per year? We certainly don't want to paste everything by hand. Take 1962 for example [Accidents in 1962](http://aviation-safety.net/database/dblist.php?Year=1962), which has 3 pages. Luckily we can get the number of pages by using `rvest` as well.
+
+We follow the steps above to get the number of pages per year with the XPath "`//*[@id="contentcolumnfull"]/div/div[2]`", with some cleaning we get the maximum pagenumber as:
+
+```{r}
+url <- "http://aviation-safety.net/database/dblist.php?Year=1962"
+
+pages <- url %>% read_html() %>%
+  html_nodes(xpath = '//*[@id="contentcolumnfull"]/div/div[2]') %>%
+  html_text() %>% strsplit(" ") %>% unlist() %>%
+  as.numeric() %>% max()
+
+pages
+```
+
+Now we can write a small loop to get all incidents of 1962, as the link changes with the page number, ie from:
+http://aviation-safety.net/database/dblist.php?Year=1962&lang=&page=1
+to
+http://aviation-safety.net/database/dblist.php?Year=1962&lang=&page=2
+
+The code for the loop looks like this:
+
+```{r}
+# initiate empty data.frame, in which we will store the data
+dat <- data.frame(
+  date = numeric(0), type = numeric(0), registration = numeric(0),
+  operator = numeric(0), fatalities = numeric(0),
+  location = numeric(0), category = numeric(0)
+)
+
+# loop through all page numbers
+for (page in 1:pages){
+  # create the new URL for the current page
+  url <- paste0(
+    "http://aviation-safety.net/database/dblist.php?Year=1962&lang=&page=", 
+    page
+  )
+  
+  # get the html data and convert it to a data.frame
+  incidents <- url %>% read_html() %>%
+    html_nodes(xpath = '//*[@id="contentcolumnfull"]/div/table') %>%
+    html_table() %>% data.frame()
+
+  # combine the data
+  dat <- rbind(dat, incidents)
+}
+
+# quick look at the dimens
+dim(dat)
+head(dat)
+```
+
+which gives us a data.frame consisting of 211 incidents of the year 1962.
+
+Lastly, we can write a loop to gather the data over multiple years:
+
+```{r}
+# set-up of initial values
+startyear <- 1960
+endyear <- 1965
+url_init <- "http://aviation-safety.net/database/dblist.php?Year="
+
+# initiate empty dataframe, in which we will store the data
+dat <- data.frame(
+  date = numeric(0), type = numeric(0), registration = numeric(0),
+  operator = numeric(0), fatalities = numeric(0),
+  location = numeric(0), category = numeric(0)
+  )
+
+for (year in startyear:endyear){
+  # get url for this year
+  url_year <- paste0(url_init, year)
+
+  # get pages
+  pages <- url_year %>% read_html() %>%
+    html_nodes(xpath = '//*[@id="contentcolumnfull"]/div/div[2]') %>%
+    html_text() %>% strsplit(" ") %>% unlist() %>%
+    as.numeric() %>% max()
+
+  # loop through the pages
+  for (page in 1:pages){
+    url <- paste0(url_year,"&lang=&page=", page)
+
+    # get the html data and convert it to a data.frame
+    incidents <- url %>% read_html() %>%
+      html_nodes(xpath = '//*[@id="contentcolumnfull"]/div/table') %>%
+      html_table() %>% data.frame()
+
+    # combine the data
+    dat <- rbind(dat, incidents)
+  }
+}
+
+dim(dat)
+head(dat)
+```
+
+In the years 1960-1965 there were 1.363 recorded aviation incidents, which we can now use in `R`.

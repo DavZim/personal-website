@@ -1,0 +1,524 @@
+---
+title: "A Gentle Introduction to Finance using R: Efficient Frontier and CAPM - Part 1"
+author: "David Zimmermann"
+date: 2016-05-24
+categories: ["R"]
+tags: ["R", "finance", "capm", "efficient-frontier"]
+math: true
+---
+
+
+
+<p>The following entry explains a basic principle of finance, the so-called efficient frontier and thus serves as a gentle introduction into one area of finance: “portfolio theory” using R.
+A second part will then concentrate on the Capital-Asset-Pricing-Method (CAPM) and its assumptions, implications and drawbacks.</p>
+<p>Note: All code that is needed for the simulations, data manipulation, and plots that is not explicitly shown in this blogpost can be found on my <a href="https://github.com/DavZim/Efficient_Frontier">Github page</a>.</p>
+<div id="introduction" class="section level2">
+<h2>Introduction</h2>
+<p>One of the basic concepts of finance is the risk-return tradeoff.
+As an illustrative example: If I were to offer you two investments with the same risk but with different expected returns, you would take the investment with the higher return (a closer look on what is meant by the terms risk and expected return follows later).
+If the two investments had the same expected return but different levels of risk, most people would choose the investment with less risk.
+This behaviour is called risk-aversion.</p>
+<p>But what happens if you have to make the decision between a strategy of how to distribute an investment worth of $100.000 between the 30 companies listed in the the German DAX index, the 100 companies from Britain’s FTSE, the 500 companies from the S&amp;P 500, or if you have the (most realistic) option to invest in all listed stocks in the world?
+How would you distribute the cash to create a promising portfolio?</p>
+<p>This is the question Markowitz tried to answer in 1952 in his paper “Portfolio Selection”.
+Now, many years later, many academics and practitioners have added their answers to the discussion, advancing the discussion, but Markowitz’s solution is still considered to be a fundamental piece of finance.
+His portfolio selection advanced into the now called “Capital Asset Pricing Model” or short CAPM.
+The <a href="http://www.rinfinance.com/agenda/">R/Finance conference 2016</a> alone lists at least 4 entries that are directly linked to portfolio theory and the CAPM.
+So what exactly is the CAPM doing, what are its implications, assumptions, what are its drawbacks, and for us most importantly, how can we leverage R to calculate it?</p>
+<p>Let’s create a hands-on example to illustrate the theory:
+We begin by looking at three different, well-known stocks of the Dow-Jones Industrial Average: IBM (<code>IBM</code>), Google/Alphabet (<code>GOOG</code>), and JP Morgan (<code>JPM</code>).
+I have gathered monthly data since 2000 from Yahoo using the <code>quantmod</code>-library and saved it to my <a href="https://github.com/DavZim/Efficient_Frontier">Github-page</a> (including the script to gather the data).
+We can load the data and plot an indexed price with the following code (notice, I use <code>data.table</code> for data storage and manipulation, but of course you can use <code>dplyr</code>, or base-r as well)</p>
+<pre class="r"><code>library(data.table)
+library(scales)
+library(ggplot2)
+
+link &lt;- &quot;https://raw.githubusercontent.com/DavZim/Efficient_Frontier/master/data/fin_data.csv&quot;
+dt &lt;- fread(link)
+dt[, date := as.Date(date)]
+
+# create indexed values
+dt[, idx_price := price/price[1], by = ticker]
+
+# plot the indexed values
+ggplot(dt, aes(x = date, y = idx_price, color = ticker)) +
+  geom_line() +
+  # Miscellaneous Formatting
+  theme_bw() + ggtitle(&quot;Price Developments&quot;) +
+  xlab(&quot;Date&quot;) + ylab(&quot;Price\n(Indexed 2000 = 1)&quot;) +
+  scale_color_discrete(name = &quot;Company&quot;)</code></pre>
+<p><img src="/blog/2016-05-24-gentle-capm-i_files/figure-html/unnamed-chunk-2-1.png" width="672" /></p>
+<p>Altough we can see that Google outperformed the other two, we can also see that it seems it was risikier to invest in Google, as shown by the large spikes and drawdowns.
+This is the principle of risk-return tradeoff that is fundamental to the CAPM.
+Usually, risk is defined as volatility, which is defined as the standard deviation of the returns
+.
+On the other hand, return is either calculated using arithmetic or logarithmic returns (for simplicity I use arithmetic returns in this post, more on the mathematics of returns can be found in the appendix of this post).
+To visualise the tradeoff, we can compute the mean and standard deviation for returns in a table or plot the two measures against each other.</p>
+<pre class="r"><code># calculate the arithmetic returns
+dt[, ret := price / shift(price, 1) - 1, by = ticker]
+
+# summary table
+# take only non-na values
+tab &lt;- dt[!is.na(ret), .(ticker, ret)]
+
+# calculate the expected returns (historical mean of returns) and
+# volatility (standard deviation of returns)
+tab &lt;- tab[, .(er = round(mean(ret), 4), 
+               sd = round(sd(ret), 4)), 
+           by = &quot;ticker&quot;]
+tab</code></pre>
+<pre><code>##    ticker     er     sd
+## 1:    IBM 0.0040 0.0554
+## 2:   GOOG 0.0217 0.0801
+## 3:    JPM 0.0064 0.0741</code></pre>
+<p>The table <code>tab</code> shows that Google had the highest expected return and also the highest volatility, whereas IBM had the lowest figures, both in terms of expected returns and volatility.</p>
+<table>
+<thead>
+<tr class="header">
+<th align="center">Ticker</th>
+<th align="right">Expected Return</th>
+<th align="right">Volatility</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td align="center">IBM</td>
+<td align="right">0.41%</td>
+<td align="right">5.55%</td>
+</tr>
+<tr class="even">
+<td align="center">GOOG</td>
+<td align="right">2.21%</td>
+<td align="right">8.03%</td>
+</tr>
+<tr class="odd">
+<td align="center">JPM</td>
+<td align="right">0.64%</td>
+<td align="right">7.43%</td>
+</tr>
+</tbody>
+</table>
+<p>One visualisation you will have with no doubt already come across if you know a bit about the CAPM is a plot regarding this risk-return tradeoff, with the risk (volatility) on the x-axis, the expected returns on the y-axis and dots for each asset/company.
+In our example it looks like this.</p>
+<pre class="r"><code>ggplot(tab, aes(x = sd, y = er, color = ticker)) +
+  geom_point(size = 5) +
+  # Miscellaneous Formatting
+  theme_bw() + ggtitle(&quot;Risk-Return Tradeoff&quot;) +
+  xlab(&quot;Volatility&quot;) + ylab(&quot;Expected Returns&quot;) +
+  scale_y_continuous(label = percent, limits = c(0, 0.03)) +
+  scale_x_continuous(label = percent, limits = c(0, 0.1))</code></pre>
+<p><img src="/blog/2016-05-24-gentle-capm-i_files/figure-html/unnamed-chunk-4-1.png" width="672" /></p>
+<p>Given that you had to take only a single stock and given past performance indicates future performance (more on the assumptions later, but for now: historic performances almost never indicates future performances), you would probably choose Google as your best investment choice.
+However, the exclusive option is not realistic as there is something called diversification and you can reduce risk by buying multiple stocks.</p>
+<p>Coming back to the examples from the beginning: If you had the choice between three fictive investments A (expected return of 5%, volatility of 4%), B (exp ret of 5%, volatility of 5%), or C (exp ret 6%, volatility of 5%), you would prefer A over B (we say A is efficient to B) as it has less volatility, and C over B as it has a higher expected return.
+However, we cannot compare A and C withouth further knowledge.
+In summary, the higher a point on the graph is to the left, the more favorable an asset is (higher expected return and less volatility).</p>
+<p><img src="risk-tradeoffs.png" /></p>
+<p>If we combine assets into a new portfolio that contains stocks from two companies, our portfolio also has an expected risk-return tradeoff.
+The crux is to calculate these values for a given set of (multiple) assets and find an optimum portfolio.
+This is what we will do next.
+We will start with just two assets to show the main principles, then we will add a third asset to show how to find the so-called efficient frontier, lastly we will look into different options and constraints when calculating the efficient frontier.</p>
+</div>
+<div id="calculating-the-risk-return-tradeoff-of-a-portfolio" class="section level2">
+<h2>Calculating the Risk-Return Tradeoff of a Portfolio</h2>
+<div id="two-assets" class="section level3">
+<h3>Two Assets</h3>
+<p>Given a portfolio consisting of two assets with a share of stock x of <span class="math inline">\(\omega_x\)</span> and a share of stock y of <span class="math inline">\(\omega_y = 1 - \omega_x\)</span> (as we invest all of the cash, we get the constraint that the weights add up to one, so that <span class="math inline">\(0 \leq \omega_x \leq 1\)</span>, <span class="math inline">\(0 \leq \omega_y \leq 1\)</span>, and <span class="math inline">\(\omega_x + \omega_y = 1\)</span>).
+Take an equally weighted portfolio as an example, where stock x (say Google) makes 50% of the portfolio (<span class="math inline">\(\omega_x = 0.5\)</span>) and stock y (i.e., IBM) makes up for the other 50% of the value (<span class="math inline">\(\omega_y = 1 - \omega_x = 0.5\)</span>).
+What are the expected returns and volatility of the portfolio containing the two assets?
+Is it a direct linear combination of the two? Not necessarily.
+The expected values are a function of the correlation <span class="math inline">\(\rho\)</span> between the returns of the assets.
+If the returns are perfectly correlated (<span class="math inline">\(\rho = 1\)</span>), a portfolio would lie on this line, however, the returns are most likely not perfectly correlated.
+The next plot shows the possible values a portfolio will take between two simulated return series given a certain correlation, the maths behind calculating this will be explained in a bit).</p>
+<p><img src="correlation_example.png" /></p>
+<p>We see that the lower the correlation between two stocks is, the better it is for diversification purposes (remember usuallyy higher expected return (up) and lower volatility (left) is better).
+In the case of a perfect negative correlation (<span class="math inline">\(\rho = - 1\)</span>) we could diversify all risk away (of course, reality has most likely no cases where two assets have a perfect positive or negative correlation).</p>
+<p>To calculate the expected return <span class="math inline">\(\hat{r}_p\)</span> and the expected volatility <span class="math inline">\(\sigma_p\)</span> of a portfolio, we need to use the following formulae, wich include the weights <span class="math inline">\(\omega\)</span> for asset x and y, the expected returns <span class="math inline">\(\hat{r}\)</span>, the expected risk <span class="math inline">\(\sigma\)</span> (standard deviations), as well as the covariance <span class="math inline">\(\sigma_{x,y}\)</span> (which is closely related to the correlation) for the two stocks.</p>
+<p>We get the expected return for the portfolio with</p>
+<p><span class="math display">\[
+\hat{r}_p = \omega_x \hat{r}_x+ \omega_y \hat{r}_y
+\]</span></p>
+<p>and the expected volatility with</p>
+<p><span class="math display">\[
+\sigma_p = \sqrt{\omega_x^2 \sigma_x^2 + \omega_y^2 \sigma_y^2 + 2 \omega_x \omega_y \sigma_{x,y}} 
+\]</span></p>
+<p>Given that the correlation between two series can be expressed as a product of their covariance and their respective standard deviations (<span class="math inline">\(\sigma_{x,y} = \rho_{x,y} \sigma_x \sigma_y\)</span>), we can see why the portfolio is relying on the correlation between the inputs.</p>
+<p>I simulated returns for multiple assets already (the code can be obtained here: <a href="https://github.com/DavZim/Efficient_Frontier/blob/master/R/create_multiple_asset_dataset.R">create_multiple_asset_dataset.R</a>).
+Using the maths we can calculate the expected return and volatility for a portfolio for given shares.
+As we want to see how good our portfolio is, we calculate not one, but many possible portfolios that have a share of <span class="math inline">\(0\leq \omega_x \leq 1\)</span> (Given that we cannot borrow money, we have the restriction <span class="math inline">\(\omega_x + \omega_y = 1\)</span>, thus we only have <span class="math inline">\(\omega_x\)</span> as a variable and not <span class="math inline">\(\omega_y\)</span>).
+First we have to load the returns, then we calculate the necessary values, in the last step we calculate the expected values for the portfolio.</p>
+<pre class="r"><code># load the data
+link &lt;- &quot;https://raw.githubusercontent.com/DavZim/Efficient_Frontier/master/data/mult_assets.csv&quot;
+mult_assets &lt;- fread(link)
+
+# calculate the necessary values:
+# I) expected returns for the two assets
+er_x &lt;- mean(mult_assets$x)
+er_y &lt;- mean(mult_assets$y)
+
+# II) risk (standard deviation) as a risk measure
+sd_x &lt;- sd(mult_assets$x)
+sd_y &lt;- sd(mult_assets$y)
+
+# III) covariance
+cov_xy &lt;- cov(mult_assets$x, mult_assets$y)
+
+# create 1000 portfolio weights (omegas)
+x_weights &lt;- seq(from = 0, to = 1, length.out = 1000)
+
+# create a data.table that contains the weights for the two assets
+two_assets &lt;- data.table(wx = x_weights,
+                         wy = 1 - x_weights)
+
+# calculate the expected returns and standard deviations for the 
+# 1000 possible portfolios
+two_assets[, &#39;:=&#39; (er_p = wx * er_x + wy * er_y,
+                   sd_p = sqrt(wx^2 * sd_x^2 +
+                                 wy^2 * sd_y^2 +
+                                 2 * wx * (1 - wx) * cov_xy))]
+two_assets</code></pre>
+<pre><code>##                wx          wy       er_p       sd_p
+##    1: 0.000000000 1.000000000 0.03000000 0.01973497
+##    2: 0.001001001 0.998998999 0.03004001 0.01971606
+##    3: 0.002002002 0.997997998 0.03008001 0.01969728
+##    4: 0.003003003 0.996996997 0.03012002 0.01967863
+##    5: 0.004004004 0.995995996 0.03016002 0.01966010
+##   ---                                              
+##  996: 0.995995996 0.004004004 0.06980549 0.04979363
+##  997: 0.996996997 0.003003003 0.06984550 0.04984333
+##  998: 0.997997998 0.002002002 0.06988550 0.04989305
+##  999: 0.998998999 0.001001001 0.06992551 0.04994277
+## 1000: 1.000000000 0.000000000 0.06996551 0.04999250</code></pre>
+<pre class="r"><code># lastly plot the values
+ggplot() +
+  geom_point(data = two_assets, aes(x = sd_p, y = er_p, color = wx)) +
+  geom_point(data = data.table(sd = c(sd_x, sd_y), mean = c(er_x, er_y)),
+             aes(x = sd, y = mean), color = &quot;red&quot;, size = 3, shape = 18) +
+  # Miscellaneous Formatting
+  theme_bw() + ggtitle(&quot;Possible Portfolios with Two Risky Assets&quot;) +
+  xlab(&quot;Volatility&quot;) + ylab(&quot;Expected Returns&quot;) +
+  scale_y_continuous(label = percent, 
+                     limits = c(0, max(two_assets$er_p) * 1.2)) +
+  scale_x_continuous(label = percent, 
+                     limits = c(0, max(two_assets$sd_p) * 1.2)) +
+  scale_color_continuous(name = expression(omega[x]), labels = percent)</code></pre>
+<p><img src="/blog/2016-05-24-gentle-capm-i_files/figure-html/unnamed-chunk-6-1.png" width="672" /></p>
+<p>With the color coding we can see that the upper point stands for stock x (<span class="math inline">\(\omega_x = 100%\)</span>) and the lower point stands for stock y (<span class="math inline">\(\omega_x = 0%\)</span>, thus <span class="math inline">\(\omega_y = 100%\)</span>).
+We also see that all possible portfolios lay on a curve.
+That means the line stands for all possible portfolios combining the two assets.
+This will change if we add a third asset.</p>
+</div>
+<div id="adding-a-third-asset" class="section level3">
+<h3>Adding a Third Asset</h3>
+<p>Adding a third asset to the portfolio expands the formula.
+For the portfolio we get an expected return of</p>
+<p><span class="math display">\[
+\hat{r}_p = \omega_x \hat{r}_x + \omega_y \hat{r}_y + \omega_z \hat{r}_z
+\]</span>
+and an expected standard deviation of</p>
+<p><span class="math display">\[
+\sigma_p = \sqrt{\omega_x^2 \sigma_x^2 + \omega_y^2 \sigma_y^2 + \omega_z^2 \sigma_z^2 +
+2 \omega_x \omega_y \sigma_{x,y} + 2 \omega_x \omega_z \sigma_{x,z} + 2 \omega_y \omega_z \sigma_{y,z}}.
+\]</span></p>
+<p>Doing this in R is fairly easy once you understand the last code-chunk for two assets.
+By expanding it we get the following</p>
+<pre class="r"><code># calculate the necessary values:
+# I) expected returns for the two assets
+er_x &lt;- mean(mult_assets$x)
+er_y &lt;- mean(mult_assets$y)
+er_z &lt;- mean(mult_assets$z)
+
+# II) risk (standard deviation) as a risk measure
+sd_x &lt;- sd(mult_assets$x)
+sd_y &lt;- sd(mult_assets$y)
+sd_z &lt;- sd(mult_assets$z)
+
+# III) covariance
+cov_xy &lt;- cov(mult_assets$x, mult_assets$y)
+cov_xz &lt;- cov(mult_assets$x, mult_assets$z)
+cov_yz &lt;- cov(mult_assets$y, mult_assets$z)
+
+# create portfolio weights (omegas)
+x_weights &lt;- seq(from = 0, to = 1, length.out = 1000)
+
+# create a data.table that contains the weights for the three assets
+three_assets &lt;- data.table(wx = rep(x_weights, each = length(x_weights)),
+                           wy = rep(x_weights, length(x_weights)))
+
+three_assets[, wz := 1 - wx - wy]
+
+
+# calculate the expected returns and standard deviations for the 1000 possible portfolios
+three_assets[, &#39;:=&#39; (er_p = wx * er_x + wy * er_y + wz * er_z,
+                     sd_p = sqrt(wx^2 * sd_x^2 +
+                                   wy^2 * sd_y^2 +
+                                   wz^2 * sd_z^2 +
+                                   2 * wx * wy * cov_xy +
+                                   2 * wx * wz * cov_xz +
+                                   2 * wy * wz * cov_yz))]
+
+# take out cases where we have negative weights (shortselling)
+three_assets &lt;- three_assets[wx &gt;= 0 &amp; wy &gt;= 0 &amp; wz &gt;= 0] 
+three_assets</code></pre>
+<pre><code>##               wx          wy           wz       er_p       sd_p
+##      1: 0.000000 0.000000000 1.000000e+00 0.04000000 0.03005254
+##      2: 0.000000 0.001001001 9.989990e-01 0.03998999 0.03002259
+##      3: 0.000000 0.002002002 9.979980e-01 0.03997998 0.02999265
+##      4: 0.000000 0.003003003 9.969970e-01 0.03996997 0.02996272
+##      5: 0.000000 0.004004004 9.959960e-01 0.03995996 0.02993281
+##     ---                                                        
+## 500348: 0.996997 0.003003003 4.336809e-17 0.06984550 0.04984333
+## 500349: 0.997998 0.000000000 2.002002e-03 0.06990552 0.04989176
+## 500350: 0.997998 0.001001001 1.001001e-03 0.06989551 0.04989239
+## 500351: 0.998999 0.000000000 1.001001e-03 0.06993552 0.04994212
+## 500352: 1.000000 0.000000000 0.000000e+00 0.06996551 0.04999250</code></pre>
+<pre class="r"><code># lastly plot the values
+ggplot() +
+  geom_point(data = three_assets, aes(x = sd_p, y = er_p, color = wx - wz)) +
+  geom_point(data = data.table(sd = c(sd_x, sd_y, sd_z), mean = c(er_x, er_y, er_z)),
+             aes(x = sd, y = mean), color = &quot;red&quot;, size = 3, shape = 18) +
+  # Miscellaneous Formatting
+  theme_bw() + 
+  ggtitle(&quot;Possible Portfolios with Three Risky Assets&quot;) +
+  xlab(&quot;Volatility&quot;) + ylab(&quot;Expected Returns&quot;) +
+  scale_y_continuous(label = percent, limits = c(0, max(three_assets$er_p) * 1.2)) +
+  scale_x_continuous(label = percent, limits = c(0, max(three_assets$sd_p) * 1.2)) +
+  scale_color_gradientn(colors = c(&quot;red&quot;, &quot;blue&quot;, &quot;yellow&quot;),
+                        name = expression(omega[x] - omega[z]), labels = percent)</code></pre>
+<p><img src="/blog/2016-05-24-gentle-capm-i_files/figure-html/unnamed-chunk-8-1.png" width="672" /></p>
+<p>We see that the area of possible portfolios has expanded into a third dimension.
+The colors try to show the two different weights.
+A yellow color indicates a portfolio consisting mainly of the asset x, a blue color indicates asset y, and a red area indicates a portfolio of asset z.
+We also see the three single asset-portfolios (the three red dots).
+I hope now it also becomes clear what an efficient portfolio is.
+To give an example: We have many possible portfolios that have a volatility of 2%, but only one of them is a portfolio we would take (the one with the highest expected return) as this is more efficient than the other possible portfolios with a volatility of 2% but with less expected returns.
+Therefore we call the (upper) edge of all possible portfolios the efficient frontier.</p>
+<p>Generally speaking, the expected returns and standard deviations for a portfolio consisting of n-assets are
+<span class="math display">\[
+\hat{r}_p = \sum_{i=1}^{n} \omega_i \hat{r}_i
+\]</span>
+and
+<span class="math display">\[
+\sigma_p = \sum_{i=1}^{n} \omega_i^2 \sigma_i^2 + \sum_{i=1}^{n} \sum_{j=1}^{n} \omega_i \omega_j \sigma_{i, j} \forall i \neq j
+\]</span></p>
+</div>
+</div>
+<div id="calculating-the-efficient-frontier" class="section level2">
+<h2>Calculating the Efficient Frontier</h2>
+<p>The efficient frontier can be calculated on its own without the need to simulate thousands of portfolios and then finding the efficient ones.
+We have to distinguish two cases, one with short-selling (that is negative weights) and one without.
+We will first look at the case without restrictions (with short-selling allowed).
+So far we have restricted our portfolios to only contain positive weights (by filtering out negative weights).</p>
+<div id="with-short-selling" class="section level3">
+<h3>With Short-Selling</h3>
+<p>To calculate the efficient frontier we can use the following closed-form formula that calculates the efficient frontier for a given input of risk (the input-value is thus <span class="math inline">\(\sigma\)</span>) and for some parameters (<span class="math inline">\(\alpha, \beta, \gamma, \delta\)</span>) using matrix algebra (note, I put the formula here if someone wants to calculate it by hand; if you are just interested in the R code, you can skip the short mathematics section).</p>
+<p><span class="math display">\[
+\hat{r}_{ef}(\sigma) = \frac{\beta}{\alpha} + \sqrt{\left(\frac{\beta}{\alpha}\right)^2 - \frac{\gamma - \delta * \sigma^2}{\alpha}},
+\]</span></p>
+<p>which is the solution to a quadratic optimization problem.
+The parameters are given by the following matrix algebra</p>
+<p><span class="math display">\[
+\alpha = 1^T s^{-1} 1,
+\]</span></p>
+<p>where <span class="math inline">\(1\)</span> is a matrix of 1’s with a length of the numbers of stocks, <span class="math inline">\(s\)</span> is a matrix of the covariances between the assets (with a dimension of n times n).</p>
+<p><span class="math display">\[
+\beta = 1^T s^{-1} \overline{ret},
+\]</span></p>
+<p>where <span class="math inline">\(\overline{ret}\)</span> stands for a vector of average returns for each stock.</p>
+<p><span class="math display">\[
+\gamma = \overline{ret}^T s^{-1} \overline{ret},
+\]</span></p>
+<p>and lastly <span class="math inline">\(\delta\)</span> is given by</p>
+<p><span class="math display">\[
+\delta = \alpha \gamma - \beta ^2
+\]</span></p>
+<p>As you can see, the only inputs are the returns of stocks, in R we can write a short function (<code>calcEFParams</code>) that calculates the parameters and returns a list with the parameters.</p>
+<pre class="r"><code>calcEFParams &lt;- function(rets) {
+  retbar &lt;- colMeans(rets, na.rm = T)
+  covs &lt;- var(rets, na.rm = T) # calculates the covariance of the returns
+  invS &lt;- solve(covs)
+  i &lt;- matrix(1, nrow = length(retbar))
+  
+  alpha &lt;- t(i) %*% invS %*% i
+  beta &lt;- t(i) %*% invS %*% retbar
+  gamma &lt;- t(retbar) %*% invS %*% retbar
+  delta &lt;- alpha * gamma - beta * beta
+  
+  retlist &lt;- list(alpha = as.numeric(alpha),
+                  beta = as.numeric(beta),
+                  gamma = as.numeric(gamma),
+                  delta = as.numeric(delta))
+  
+  return(retlist)
+}
+
+abcds &lt;- calcEFParams(mult_assets)
+abcds</code></pre>
+<pre><code>## $alpha
+## [1] 4037.551
+## 
+## $beta
+## [1] 147.8334
+## 
+## $gamma
+## [1] 5.992395
+## 
+## $delta
+## [1] 2339.881</code></pre>
+<pre class="r"><code>calcEFValues &lt;- function(x, abcd, upper = T) {
+  alpha &lt;- abcd$alpha
+  beta &lt;- abcd$beta
+  gamma &lt;- abcd$gamma
+  delta &lt;- abcd$delta
+  
+  if (upper) {
+    retval &lt;- beta / alpha + sqrt((beta / alpha) ^ 2 - (gamma - delta * x ^ 2) / (alpha))
+  } else {
+    retval &lt;- beta / alpha - sqrt((beta / alpha) ^ 2 - (gamma - delta * x ^ 2) / (alpha))
+  }
+  
+  return(retval)
+}
+
+# calculate the risk-return tradeoff the two assets (for plotting the points)
+df_table &lt;- melt(mult_assets)[, .(er = mean(value),
+                                  sd = sd(value)), by = variable]
+
+# plot the values
+ggplot(df_table, aes(x = sd, y = er)) +
+  # add the stocks
+  geom_point(size = 4, color = &quot;red&quot;, shape = 18) +
+  # add the upper efficient frontier
+  stat_function(fun = calcEFValues, args = list(abcd = abcds, upper = T), n = 10000,
+                color = &quot;red&quot;, size = 1) +
+  # add the lower &quot;efficient&quot; frontier
+  stat_function(fun = calcEFValues, args = list(abcd = abcds, upper = F), n = 10000,
+                color = &quot;blue&quot;, size = 1) +
+  # Miscellaneous Formatting
+  theme_bw() + ggtitle(&quot;Efficient Frontier with Short-Selling&quot;) +
+  xlab(&quot;Volatility&quot;) + ylab(&quot;Expected Returns&quot;) +
+  scale_y_continuous(label = percent, limits = c(0, max(df_table$er) * 1.2)) +
+  scale_x_continuous(label = percent, limits = c(0, max(df_table$sd) * 1.2))</code></pre>
+<p><img src="/blog/2016-05-24-gentle-capm-i_files/figure-html/unnamed-chunk-10-1.png" width="672" /></p>
+<p>Given the values for <span class="math inline">\(\alpha\)</span>, <span class="math inline">\(\beta\)</span>, <span class="math inline">\(\gamma\)</span>, and <span class="math inline">\(\delta\)</span> we receive the function for the frontier as</p>
+<p><span class="math display">\[
+\hat{r}_{ef}(\sigma) = \frac{147.8}{4037.6} \pm \sqrt{\left(\frac{147.8}{4037.6}\right)^2 - \frac{6.0 - 2339.9 * \sigma^2}{4037.6}}.
+\]</span></p>
+<p>The values for the <code>+</code>-part of the function is the upper, efficient frontier, whereas the <code>-</code>-part represents the lower, inefficient frontier.</p>
+<p>The red curve (the upper curve) is the real efficient frontier, whereas the lower (blue) curve stands for an inefficient frontier.
+This is due to the fact, that we can create a mixture of the three assets that has the same volatility but a higher expected return.
+As we are able to shortsell (borrow money by selling stocks that we don’t own and investing this cash) the efficient frontier doesn’t necessarily touch the three assets, nor does it end at the points but extends outwards.</p>
+<p>Although the maths is not trivial (at least when it comes to understanding), the calculation of the efficient frontier is given by a closed mathematical function and its calculation is straightforward.
+This will change in the next chapter, when we add the restrictions that all weights have to be larger than zero (i.e., no short-selling).</p>
+</div>
+<div id="without-short-selling" class="section level3">
+<h3>Without Short-Selling</h3>
+<p>Restricting the portfolio selection by only having positive weights of the assets limits the amounts of possible portfolios and introduces complexity that cannot be handled by closed-form mathematics, thus we need to fall back to mathematical optimization.
+There is a wide variety of possible packages that are able to do this, I found the <code>portfolio.optim</code>-function of the <code>tseries</code>-package most useful.</p>
+<p>The function takes asset returns, and a desired portfolio return as an input (besides other parameters that we do not use here) and returns information about the portfolio at that desired return.
+We can write a short wrapper function that gives us the efficient frontier.</p>
+<pre class="r"><code>library(tseries)
+
+df_table &lt;- melt(mult_assets)[, .(er = mean(value),
+                                  sd = sd(value)), by = variable]
+
+er_vals &lt;- seq(from = min(df_table$er), 
+               to = max(df_table$er),
+               length.out = 1000)
+
+# find an optimal portfolio for each possible possible expected return 
+# (note that the values are explicitly set between the minimum and maximum of
+# the expected returns per asset)
+sd_vals &lt;- sapply(er_vals, function(er) {
+  op &lt;- try(portfolio.optim(as.matrix(mult_assets), er), 
+            silent = TRUE)
+  if (inherits(op, &quot;try-error&quot;)) return(NA)
+  return(op$ps)
+})
+
+plot_dt &lt;- data.table(sd = sd_vals, er = er_vals)
+plot_dt &lt;- plot_dt[!is.na(sd)]
+
+# find the lower and the upper frontier
+minsd &lt;- min(plot_dt$sd)
+minsd_er &lt;- plot_dt[sd == minsd, er]
+plot_dt[, efficient := er &gt;= minsd_er]
+plot_dt</code></pre>
+<pre><code>##              sd         er efficient
+##   1: 0.01965715 0.03004001     FALSE
+##   2: 0.01958006 0.03008001     FALSE
+##   3: 0.01950373 0.03012002     FALSE
+##   4: 0.01942815 0.03016002     FALSE
+##   5: 0.01935335 0.03020003     FALSE
+##  ---                                
+## 994: 0.04965690 0.06976548      TRUE
+## 995: 0.04972396 0.06980549      TRUE
+## 996: 0.04979104 0.06984550      TRUE
+## 997: 0.04985816 0.06988550      TRUE
+## 998: 0.04992531 0.06992551      TRUE</code></pre>
+<pre class="r"><code>ggplot() +
+  geom_point(data = plot_dt[efficient == F], aes(x = sd, y = er), size = 0.5, color = &quot;blue&quot;) +
+  geom_point(data = plot_dt[efficient == T], aes(x = sd, y = er), size = 0.5, color = &quot;red&quot;) +
+  geom_point(data = df_table, aes(x = sd, y = er), size = 4, color = &quot;red&quot;, shape = 18) +
+  # Miscellaneous Formatting
+  theme_bw() + ggtitle(&quot;Efficient Frontier without Short-Selling&quot;) +
+  xlab(&quot;Volatility&quot;) + ylab(&quot;Expected Returns&quot;) +
+  scale_y_continuous(label = percent, limits = c(0, max(df_table$er) * 1.2)) +
+  scale_x_continuous(label = percent, limits = c(0, max(df_table$sd) * 1.2))</code></pre>
+<p><img src="/blog/2016-05-24-gentle-capm-i_files/figure-html/unnamed-chunk-12-1.png" width="672" /></p>
+<p>Comparing the two scenarios we see that restricting the weights (prohibiting short-sells), we also restrict the number of possible portfolios.
+In some cases, restricting short-sells yields portfolios with less expected returns or a higher expected volatility.</p>
+<p>To directly compare the two options we can use the following code.</p>
+<pre class="r"><code># combine the data into one plotting data.table called &quot;pdat&quot;
+# use plot_dt with constraints
+pdat1 &lt;- plot_dt[, .(sd, er, type = &quot;wo_short&quot;, efficient)]
+
+# calculate the values without constraints
+pdat2lower &lt;- data.table(sd = seq(from = 0, to = max(pdat1$sd) * 1.2, length.out = 1000))
+pdat2lower[, &#39;:=&#39; (er = calcEFValues(sd, abcds, F),
+                   type = &quot;short&quot;,
+                   efficient = F)]
+
+pdat2upper &lt;- data.table(sd = seq(from = 0, to = max(pdat1$sd) * 1.2, length.out = 1000))
+pdat2upper[, &#39;:=&#39; (er = calcEFValues(sd, abcds, T),
+                   type = &quot;short&quot;,
+                   efficient = T)]
+
+pdat &lt;- rbindlist(list(pdat1, pdat2upper, pdat2lower))
+
+# plot the values
+ggplot() +
+  geom_line(data = pdat, aes(x = sd, y = er, color = type, linetype = efficient), size = 1) +
+  geom_point(data = df_table, aes(x = sd, y = er), size = 4, color = &quot;red&quot;, shape = 18) +
+  # Miscellaneous Formatting
+  theme_bw() + ggtitle(&quot;Efficient Frontiers&quot;) +
+  xlab(&quot;Volatility&quot;) + ylab(&quot;Expected Returns&quot;) +
+  scale_y_continuous(label = percent, limits = c(0, max(df_table$er) * 1.2)) +
+  scale_x_continuous(label = percent, limits = c(0, max(df_table$sd) * 1.2)) +
+  scale_color_manual(name = &quot;Short-Sells&quot;, values = c(&quot;red&quot;, &quot;blue&quot;), labels = c(&quot;Allowed&quot;, &quot;Prohibited&quot;)) +
+  scale_linetype_manual(name = &quot;Efficient&quot;, values = c(2, 1))</code></pre>
+<p><img src="/blog/2016-05-24-gentle-capm-i_files/figure-html/unnamed-chunk-13-1.png" width="672" /></p>
+<p>There are many ways to do this and I am certainly not claiming that this is the only option for portfolio selection, but the efficient frontier is a very useful tool to understand one of the basics of finance.
+The question of which portfolio of the efficient frontier is considered best within the model-frameworks, has to be left open in this part, but will be adressed using CAPM in part II.</p>
+<p>This closes the first part of the series.
+The next section will look more into the CAPM, which is very closely related to the efficient frontier (many would argue that the efficient frontier is part of the CAPM) and its implications, assumptions, and drawbacks.
+In the meantime, if you have questions, feedback or issues, please leave a comment or write me an email (you find my email in the about-section).</p>
+<p>Lastly, if you want to use the graphics or code for your own teaching, please contact me and make sure that you give credit and link back to my blog.
+Thank you very much.
+Also as a disclaimer, I am in no way giving any financial advice in this post.</p>
+</div>
+</div>
+<div id="appendix" class="section level1">
+<h1>Appendix</h1>
+<p>One of the many issues I haven’t properly addressed in this entry is the calculation of returns.
+There are a couple of ways of how to calculate the returns, most often used are arithmetic and logarithmic returns.</p>
+<p>Arithmetic Returns
+<span class="math display">\[
+r_t = \frac{P_t - P_{t-1}}{P_{t-1}} = \frac{P_t}{P_{t-1}} - 1
+\]</span>
+Logarithmic Returns
+<span class="math display">\[
+r_t = log\left(\frac{P_t}{P_{t-1}}\right) = log(P_t) - log(P_{t-1})
+\]</span></p>
+<p>The difference between the two is enough to cover another blog post, which is what Pat of PortfolioProbe already did, so if you want to know more about the two, check out his <a href="http://www.portfolioprobe.com/2010/10/04/a-tale-of-two-returns/">“Tale of Two Returns”</a>.</p>
+</div>

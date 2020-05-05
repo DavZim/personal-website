@@ -1,0 +1,53 @@
+---
+title: "Getting that X with the Glog function and Lambert's W"
+author: "David Zimmermann"
+date: 2015-07-16
+categories: ["R"]
+tags: ["R", "math"]
+---
+
+
+
+<p>Facing a simple, yet frustrating formula like this</p>
+<p><span class="math display">\[xe^{ax}=b\]</span></p>
+<p>and the task to solve it for x left me googling around for hours until I found salvation in <a href="http://www.wolframalpha.com/input/?i=x*exp%28a*x%29%3Db+solve+x">Wolfram Alpha</a>, <a href="https://en.wikipedia.org/wiki/Lambert_W_function">Wikipedia</a>, and a nice <a href="https://dahtah.wordpress.com/2011/11/16/lamberts-w-function-and-the-generalised-logarithm/">blogpost</a> with R-syntax to solve a similar equation.</p>
+<p>Using the results from Wolfram Alpha I was able to find the solution with the <code>gsl</code> library</p>
+<pre class="r"><code># install.packages(&quot;gsl&quot;)
+library(gsl)
+
+# create some example data
+dat &lt;- data.frame(a = 0.109861, x = 10)
+# a is set so that b is roughly 30. 
+# Lazy as I am I used Excel and its solver ability to find numbers
+
+# to check if b is close to 30. Using the initial formula
+dat$b &lt;- dat$x * exp(dat$a * dat$x)
+dat
+
+# solve for x2 and see if x and x2 are similar and close to 10
+dat$x2 &lt;- lambert_W0(dat$a * dat$b)/dat$a
+dat
+#&gt;  a        x  b2       x2
+#&gt;1 0.109861 10 29.99993 10.00001</code></pre>
+<p>Hurray!</p>
+<p>Sometimes life can be so easy (after a long time searching for the right results….).</p>
+<div id="appendix-improvements" class="section level1">
+<h1>Appendix: Improvements</h1>
+<p>After revisiting this article some time later, I wondered what the speed is compared to Dan Kelley’s (see comment below) alternative. After firing up some repetitions using microbenchmark I got the following:</p>
+<pre class="r"><code>library(gsl)
+library(rootSolve)
+library(microbenchmark)
+library(ggplot2)
+
+dat &lt;- data.frame(a = 0.109861, x = 10)
+dat$b &lt;- dat$x * exp(dat$a * dat$x)
+
+f &lt;- function(x, a, b) x*exp(a*x) - b
+
+autoplot(microbenchmark(
+               lambertW = dat$x2 &lt;- lambert_W0(dat$a * dat$b)/dat$a,
+               uniroot = dat$x3 &lt;- uniroot.all(f, interval = c(0, 100),
+                                               a = dat$a, b = dat$b),
+               times = 10000))</code></pre>
+<p><img src="benchmark.png" /></p>
+</div>

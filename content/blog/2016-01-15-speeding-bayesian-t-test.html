@@ -1,0 +1,50 @@
+---
+title: "Speeding \"Bayesian Power Analysis t-test\" up with Snowfall"
+author: "David Zimmermann"
+date: 2016-01-15
+categories: ["R"]
+tags: ["R", "monte-carlo", "snowfall", "parallel"]
+---
+
+
+
+<p>This is a direct (though minor) answer to Daniel’s blogpost <a href="Power%20Analysis%20for%20default%20Bayesian%20t-tests">http://daniellakens.blogspot.de/2016/01/power-analysis-for-default-bayesian-t.html</a>, which I found very interesting, as I have been trying to get my head around Bayesian statistics for quite a while now. However, one thing that bugs me, is the time needed for the simulation. On my machine it took around 22 minutes. Depending on the task, 22 minutes for a signle test can be way too long (especially if the tests are done in a business environment where many tests are needed - yesterday) and a simple t-test might be more appealing only because it takes a shorter computing time. Here is my solution to speed-up the code using <code>snowfall</code>’s load-balancing parallel structures to reduce the time to 8.5 minutes.</p>
+<p>The initial code (which you can find in the original post) uses a for loop, <code>snowfall</code>, however, uses a function that we need to export, which is simply called <code>simFun</code>. The function takes the sample size <code>n</code>, the true effect size <code>D</code>, as well as the effect size of the alternative hypothesis <code>rscaleBF</code> as arguments (note, the names are equivalent to Daniel’s, as well as the values of the variables (i.e., n = 50 etc.)).</p>
+<pre class="r"><code>simFun &lt;- function(n, D, rscaleBF){
+  library(BayesFactor)
+  x &lt;- rnorm(n = n, mean = 0, sd = 1)
+  y &lt;- rnorm(n = n, mean = D, sd = 1)
+  
+  return(exp((ttestBF(x, y, rscale = rscaleBF))@bayesFactor$bf))
+}</code></pre>
+<p>To load, initiate, and finally execute the <code>snowfall</code>-code, we can use the following:</p>
+<pre class="r"><code># load the library
+library(snowfall)
+n &lt;- 50; D &lt;- 0.0; nSim &lt;- 100000; rscaleBF &lt;- sqrt(2)/2; threshold &lt;- 3
+
+# for time-keeping
+t0 &lt;- Sys.time()
+
+# initiate a parallel cluster with 4 cpus
+sfInit(parallel = T, cpus = 4)
+
+# export the function to the clusters
+sfExport(&quot;simFun&quot;, &quot;n&quot;, &quot;D&quot;, &quot;rscaleBF&quot;)
+
+# execute the code
+bf &lt;- sfClusterApplyLB(1:nSim, function(i) simFun(n = n, D = D, rscaleBF = rscaleBF))
+
+# stop the clusters
+sfStop()
+
+# print the time it took for the calculation
+Sys.time() - t0
+# Time difference of 8.490639 mins
+
+# and finally the result
+sum(bf &lt; (1/threshold))/nSim
+#[1]  0.68578</code></pre>
+<p>With Daniel’s code I got <code>supportH0 = 0.6904</code>, the <code>snowfall</code>-code almost reproduces the same number <code>0.68578</code>, but reduces the time substantially.</p>
+<p>I hope you found this post interesting/helpful, should you have any questions, you are more then welcome to ask them here, otherwise send me an e-mail.</p>
+<p>Lastly, thanks to Daniel, who was able to find some bugs in an earlier version of the code.</p>
+<p>Note, the earlier version stated that the code was improved by 60x (without giving a result), the numbers are now corrected.</p>

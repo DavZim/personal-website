@@ -1,0 +1,161 @@
+---
+title: "Using rvest and dplyr to scrape data and look at aviation incidents"
+author: "David Zimmermann"
+date: 2015-04-30
+categories: ["R"]
+tags: ["dplyr", "rvest", "web-scraping", "aviation", "R"]
+---
+
+
+
+<p>For a project I recently faced the issue of getting a database of all aviation incidents. As I really wanted to try Hadley’s new <code>rvest</code>-package, I thought I will give it a try and share the code with you.</p>
+<p>The data of aviation incidents starting in 1919 from the Aviation Safety Network can be found here: <a href="http://aviation-safety.net/database/">Aviation Safety Network</a></p>
+<p>First, we needed to install and load the <code>rvest</code>-package, as well as <code>dplyr</code>, which I love for removing lots of messy code (if you are unfamiliar with the <code>piping</code>-operator <code>%&gt;%</code> have a look at this description: <a href="http://www.r-statistics.com/2014/08/simpler-r-coding-with-pipes-the-present-and-future-of-the-magrittr-package/">Introduction to Piping in R</a></p>
+<pre class="r"><code># install.packages(&quot;rvest&quot;)
+# install.packages(&quot;dplyr&quot;)
+library(rvest)</code></pre>
+<pre><code>## Loading required package: xml2</code></pre>
+<pre class="r"><code>library(dplyr)</code></pre>
+<pre><code>## 
+## Attaching package: &#39;dplyr&#39;</code></pre>
+<pre><code>## The following objects are masked from &#39;package:stats&#39;:
+## 
+##     filter, lag</code></pre>
+<pre><code>## The following objects are masked from &#39;package:base&#39;:
+## 
+##     intersect, setdiff, setequal, union</code></pre>
+<p>Let’s try out some functions of <code>rvest</code>.</p>
+<p>Say we want to read all incidents that happened in the year 1920: <a href="http://aviation-safety.net/database/dblist.php?Year=1920">Aviation Incidents 1920</a>. We need to find the right html table to download and the link to it, to be more precise, the XPath. This can be done by using “inspect element” (right-click on the table, inspect element, right click on the element in the code and “copy XPath”). In our case the XPath is
+<code>&quot;//*[@id=&quot;contentcolumnfull&quot;]/div/table&quot;</code>.
+To load the html data to R we can use:</p>
+<pre class="r"><code>url &lt;- &quot;http://aviation-safety.net/database/dblist.php?Year=1920&quot;
+
+# load the html code to R
+incidents1920 &lt;- url %&gt;% read_html() 
+
+# filter for the right xpath node
+incidents1920 &lt;- incidents1920 %&gt;% 
+  html_nodes(xpath = &#39;//*[@id=&quot;contentcolumnfull&quot;]/div/table&#39;) 
+
+# convert to a data.frame
+incidents1920 &lt;- incidents1920 %&gt;% html_table() %&gt;% data.frame()
+
+# or in one go
+incidents1920 &lt;- url %&gt;% read_html() %&gt;% 
+  html_nodes(xpath = &#39;//*[@id=&quot;contentcolumnfull&quot;]/div/table&#39;) %&gt;% 
+  html_table() %&gt;% data.frame()</code></pre>
+<p>Which gives us a small data.frame of 4 accidents.</p>
+<p>But what happens if we have more than one page of data per year? We certainly don’t want to paste everything by hand. Take 1962 for example <a href="http://aviation-safety.net/database/dblist.php?Year=1962">Accidents in 1962</a>, which has 3 pages. Luckily we can get the number of pages by using <code>rvest</code> as well.</p>
+<p>We follow the steps above to get the number of pages per year with the XPath “<code>//*[@id=&quot;contentcolumnfull&quot;]/div/div[2]</code>”, with some cleaning we get the maximum pagenumber as:</p>
+<pre class="r"><code>url &lt;- &quot;http://aviation-safety.net/database/dblist.php?Year=1962&quot;
+
+pages &lt;- url %&gt;% read_html() %&gt;%
+  html_nodes(xpath = &#39;//*[@id=&quot;contentcolumnfull&quot;]/div/div[2]&#39;) %&gt;%
+  html_text() %&gt;% strsplit(&quot; &quot;) %&gt;% unlist() %&gt;%
+  as.numeric() %&gt;% max()
+
+pages</code></pre>
+<pre><code>## [1] 3</code></pre>
+<p>Now we can write a small loop to get all incidents of 1962, as the link changes with the page number, ie from:
+<a href="http://aviation-safety.net/database/dblist.php?Year=1962&amp;lang=&amp;page=1" class="uri">http://aviation-safety.net/database/dblist.php?Year=1962&amp;lang=&amp;page=1</a>
+to
+<a href="http://aviation-safety.net/database/dblist.php?Year=1962&amp;lang=&amp;page=2" class="uri">http://aviation-safety.net/database/dblist.php?Year=1962&amp;lang=&amp;page=2</a></p>
+<p>The code for the loop looks like this:</p>
+<pre class="r"><code># initiate empty data.frame, in which we will store the data
+dat &lt;- data.frame(
+  date = numeric(0), type = numeric(0), registration = numeric(0),
+  operator = numeric(0), fatalities = numeric(0),
+  location = numeric(0), category = numeric(0)
+)
+
+# loop through all page numbers
+for (page in 1:pages){
+  # create the new URL for the current page
+  url &lt;- paste0(
+    &quot;http://aviation-safety.net/database/dblist.php?Year=1962&amp;lang=&amp;page=&quot;, 
+    page
+  )
+  
+  # get the html data and convert it to a data.frame
+  incidents &lt;- url %&gt;% read_html() %&gt;%
+    html_nodes(xpath = &#39;//*[@id=&quot;contentcolumnfull&quot;]/div/table&#39;) %&gt;%
+    html_table() %&gt;% data.frame()
+
+  # combine the data
+  dat &lt;- rbind(dat, incidents)
+}
+
+# quick look at the dimens
+dim(dat)</code></pre>
+<pre><code>## [1] 236   9</code></pre>
+<pre class="r"><code>head(dat)</code></pre>
+<pre><code>##          date                    type registration             operator fat.
+## 1 02-JAN-1962     Douglas C-47 (DC-3)       EP-ABB             Iran Air    0
+## 2 02-JAN-1962 Convair C-131E (CV-440)      55-4750                 USAF     
+## 3 06-JAN-1962           Curtiss C-46A       HR-TNB                  TAN    1
+## 4 08-JAN-1962 Lockheed RB-69A Neptune      54-4038 Republic of China AF   14
+## 5 10-JAN-1962     Douglas C-47 (DC-3)                Air National Guard    5
+## 6 10-JAN-1962    Douglas C-47A (DC-3)     42-92078                 USAF     
+##          location Var.7 pic cat
+## 1 Kabul-Khwaja...    NA  NA  A1
+## 2                    NA  NA  U1
+## 3 Belize City-...    NA  NA  A1
+## 4       Korea Bay    NA  NA  A1
+## 5 South Park T...    NA  NA  A1
+## 6         unknown    NA  NA  A1</code></pre>
+<p>which gives us a data.frame consisting of 211 incidents of the year 1962.</p>
+<p>Lastly, we can write a loop to gather the data over multiple years:</p>
+<pre class="r"><code># set-up of initial values
+startyear &lt;- 1960
+endyear &lt;- 1965
+url_init &lt;- &quot;http://aviation-safety.net/database/dblist.php?Year=&quot;
+
+# initiate empty dataframe, in which we will store the data
+dat &lt;- data.frame(
+  date = numeric(0), type = numeric(0), registration = numeric(0),
+  operator = numeric(0), fatalities = numeric(0),
+  location = numeric(0), category = numeric(0)
+  )
+
+for (year in startyear:endyear){
+  # get url for this year
+  url_year &lt;- paste0(url_init, year)
+
+  # get pages
+  pages &lt;- url_year %&gt;% read_html() %&gt;%
+    html_nodes(xpath = &#39;//*[@id=&quot;contentcolumnfull&quot;]/div/div[2]&#39;) %&gt;%
+    html_text() %&gt;% strsplit(&quot; &quot;) %&gt;% unlist() %&gt;%
+    as.numeric() %&gt;% max()
+
+  # loop through the pages
+  for (page in 1:pages){
+    url &lt;- paste0(url_year,&quot;&amp;lang=&amp;page=&quot;, page)
+
+    # get the html data and convert it to a data.frame
+    incidents &lt;- url %&gt;% read_html() %&gt;%
+      html_nodes(xpath = &#39;//*[@id=&quot;contentcolumnfull&quot;]/div/table&#39;) %&gt;%
+      html_table() %&gt;% data.frame()
+
+    # combine the data
+    dat &lt;- rbind(dat, incidents)
+  }
+}
+
+dim(dat)</code></pre>
+<pre><code>## [1] 1363    9</code></pre>
+<pre class="r"><code>head(dat)</code></pre>
+<pre><code>##          date                          type registration          operator
+## 1 03-JAN-1960          Douglas C-47A (DC-3)       VT-CGG   Indian Airlines
+## 2 03-JAN-1960 Lockheed L-749A Constellation        N110A Eastern Air Lines
+## 3 04-JAN-1960                 Curtiss C-46A       PP-SLJ     T.A. Salvador
+## 4 04-JAN-1960            U-1A Otter (DHC-3)      55-2974           US Army
+## 5 05-JAN-1960          Vickers 701 Viscount       G-AMNY               BEA
+## 6 06-JAN-1960                 Douglas DC-6B       N8225H National Airlines
+##   fat.         location Var.7 pic cat
+## 1    9     near Taksing    NA  NA  A1
+## 2    0  Philadelphia...    NA  NA  A1
+## 3    0  Dianopolis A...    NA  NA  A1
+## 4   10    Gulf of Sirte    NA  NA  A1
+## 5    0  Malta-Luqa A...    NA  NA  A1
+## 6   34 near Bolivia, NC    NA  NA  C1</code></pre>
+<p>In the years 1960-1965 there were 1.363 recorded aviation incidents, which we can now use in <code>R</code>.</p>
