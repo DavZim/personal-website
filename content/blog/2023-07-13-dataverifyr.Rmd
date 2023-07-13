@@ -1,7 +1,7 @@
 ---
 title: "Introducing dataverifyr: A Lightweight, Flexible, and Fast Data Validation Package that Can Handle All Sizes of Data "
 author: "David Zimmermann"
-date: 2017-11-30
+date: 2023-07-13
 categories: ["R"]
 tags: ["R", "package", "verification", "data"]
 ---
@@ -15,7 +15,7 @@ In every data project, there should be a check that the data actually looks like
 This can be as simple as `stopifnot(all(data$values > 0))`, but as with everything "simple", you typically want to have some additional features, such as cleaner error messages, rules separated from your R script (eg in a yaml file), result visualization, and last but least, a library that does this as fast as possible.
 The last bit is especially important when you have the data in a database or as an `arrow` `.parquet` file, due to its size or complexity.
 
-The newly released [`dataverifyr`](https://davzim.github.io/dataverifyr/) package (on [CRAN](https://cran.r-project.org/package=dataverifyr)) allows you to do exactly that: write rules in a yaml file, load the rules, check if the rules where matched and filter for data points that do not conform to the rules; all while respecting your data framework: `data.table`, `dplyr`, `arrow`, `duckdb`, or other `DBI`-compliant databases.
+The newly released [`dataverifyr`](https://github.com/DavZim/dataverifyr/) package (on [CRAN](https://cran.r-project.org/package=dataverifyr)) allows you to do exactly that: write rules in a yaml file, load the rules, check if the rules where matched and filter for data points that do not conform to the rules; all while respecting your data framework: `data.table`, `dplyr`, `arrow`, `duckdb`, or other `DBI`-compliant databases.
 
 The following is an excerpt of the Readme of ´dataverifyr` that highlights how to use the package.
 
