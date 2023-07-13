@@ -1,0 +1,177 @@
+---
+title: "Introducing dataverifyr: A Lightweight, Flexible, and Fast Data Validation Package that Can Handle All Sizes of Data "
+author: "David Zimmermann"
+date: 2017-11-30
+categories: ["R"]
+tags: ["R", "package", "verification", "data"]
+---
+
+
+
+<p>In every data project, there should be a check that the data actually looks like what you expect it to look like.
+This can be as simple as <code>stopifnot(all(data$values &gt; 0))</code>, but as with everything “simple”, you typically want to have some additional features, such as cleaner error messages, rules separated from your R script (eg in a yaml file), result visualization, and last but least, a library that does this as fast as possible.
+The last bit is especially important when you have the data in a database or as an <code>arrow</code> <code>.parquet</code> file, due to its size or complexity.</p>
+<p>The newly released <a href="https://davzim.github.io/dataverifyr/"><code>dataverifyr</code></a> package (on <a href="https://cran.r-project.org/package=dataverifyr">CRAN</a>) allows you to do exactly that: write rules in a yaml file, load the rules, check if the rules where matched and filter for data points that do not conform to the rules; all while respecting your data framework: <code>data.table</code>, <code>dplyr</code>, <code>arrow</code>, <code>duckdb</code>, or other <code>DBI</code>-compliant databases.</p>
+<p>The following is an excerpt of the Readme of ´dataverifyr` that highlights how to use the package.</p>
+<div id="larger-example-using-the-arrow-backend" class="section level2">
+<h2>Larger Example using the <code>arrow</code> backend</h2>
+<p>For a more involved example, using a different backend, let’s say we
+have a larger dataset of taxi trips from NY (see also the official
+<a href="https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page">source of the
+data</a>),
+that we have saved as a local arrow dataset (using parquet as a data
+format), where we want to make sure that some variables are in-line with
+our expectations/rules.</p>
+<div id="download-and-prepare-data" class="section level3">
+<h3>1 Download and Prepare Data</h3>
+<p>First we prepare the data by downloading it and writing the dataset to
+<code>.parquet</code> files. This needs to be done only once and is shown for
+reproducibility reasons only, the actual <code>dataverifyr</code> code is shown
+below the next block</p>
+<pre class="r"><code>library(arrow)
+url &lt;- &quot;https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2018-01.parquet&quot;
+file &lt;- &quot;yellow_tripdata_2018-01.parquet&quot;
+if (!file.exists(file)) download.file(url, file, method = &quot;curl&quot;)
+file.size(file) / 1e6 # in MB
+#&gt; [1] 123.6685
+
+# quick check of the filesize
+d &lt;- read_parquet(file)
+dim(d)
+#&gt; [1] 8760687      19
+names(d)
+#&gt;  [1] &quot;VendorID&quot;              &quot;tpep_pickup_datetime&quot;  &quot;tpep_dropoff_datetime&quot; &quot;passenger_count&quot;      
+#&gt;  [5] &quot;trip_distance&quot;         &quot;RatecodeID&quot;            &quot;store_and_fwd_flag&quot;    &quot;PULocationID&quot;         
+#&gt;  [9] &quot;DOLocationID&quot;          &quot;payment_type&quot;          &quot;fare_amount&quot;           &quot;extra&quot;                
+#&gt; [13] &quot;mta_tax&quot;               &quot;tip_amount&quot;            &quot;tolls_amount&quot;          &quot;improvement_surcharge&quot;
+#&gt; [17] &quot;total_amount&quot;          &quot;congestion_surcharge&quot;  &quot;airport_fee&quot;
+
+# write the dataset to disk
+write_dataset(d, &quot;nyc-taxi-data&quot;)</code></pre>
+</div>
+<div id="create-rules-in-yaml" class="section level3">
+<h3>2 Create Rules in <code>yaml</code></h3>
+<p>Next, we can create some rules that we will use to check our data. As we
+saw earlier, we can create the rules in R using the <code>rule()</code> and
+<code>ruleset()</code> functions, there is however, the (in my opinion) preferred
+option to separate the code from the rules by writing the rules in a
+separate yaml file and reading them into R.</p>
+<p>First we display the hand-written contents of the <code>nyc_data_rules.yaml</code>
+file.</p>
+<pre class="yaml"><code>- name: &#39;Rule for: passenger_count&#39;
+  expr: passenger_count &gt;= 0 &amp; passenger_count &lt;= 10
+  allow_na: no
+  negate: no
+  index: 1
+- name: &#39;Rule for: trip_distance&#39;
+  expr: trip_distance &gt;= 0 &amp; trip_distance &lt;= 1000
+  allow_na: no
+  negate: no
+  index: 2
+- name: &#39;Rule for: payment_type&#39;
+  expr: payment_type %in% c(0, 1, 2, 3, 4)
+  allow_na: no
+  negate: no
+  index: 3</code></pre>
+<p>Then, we can load, display, and finally check the rules against the data</p>
+<pre class="r"><code>rules &lt;- read_rules(&quot;nyc_data_rules.yaml&quot;)
+rules
+#&gt; &lt;Verification Ruleset with 3 elements&gt;
+#&gt;   [1] &#39;Rule for: passenger_count&#39; matching `passenger_count &gt;= 0 &amp; passenger_count &lt;= 10` (allow_na: FALSE)
+#&gt;   [2] &#39;Rule for: trip_distance&#39; matching `trip_distance &gt;= 0 &amp; trip_distance &lt;= 1000` (allow_na: FALSE)
+#&gt;   [3] &#39;Rule for: payment_type&#39; matching `payment_type %in% c(0, 1, 2, 3, 4)` (allow_na: FALSE)</code></pre>
+</div>
+<div id="verify-that-the-data-matches-the-given-rules" class="section level3">
+<h3>3 Verify that the Data matches the given Rules</h3>
+<p>Now we can check if the data follows our rules or if we have unexpected
+data points:</p>
+<pre class="r"><code># open the dataset 
+ds &lt;- open_dataset(&quot;nyc-taxi-data/&quot;)
+
+# perform the data validation check
+res &lt;- check_data(ds, rules)
+res
+#&gt; # A tibble: 3 × 10
+#&gt;   name                      expr              allow…¹ negate   tests    pass  fail warn  error time 
+#&gt;   &lt;chr&gt;                     &lt;chr&gt;             &lt;lgl&gt;   &lt;lgl&gt;    &lt;int&gt;   &lt;int&gt; &lt;int&gt; &lt;chr&gt; &lt;chr&gt; &lt;drt&gt;
+#&gt; 1 Rule for: passenger_count passenger_count … FALSE   FALSE  8760687 8760687     0 &quot;&quot;    &quot;&quot;    0.56…
+#&gt; 2 Rule for: trip_distance   trip_distance &gt;=… FALSE   FALSE  8760687 8760686     1 &quot;&quot;    &quot;&quot;    0.43…
+#&gt; 3 Rule for: payment_type    payment_type %in… FALSE   FALSE  8760687 8760687     0 &quot;&quot;    &quot;&quot;    0.42…
+#&gt; # … with abbreviated variable name ¹​allow_na
+
+plot_res(res)</code></pre>
+<p><img src="README-taxi3-1.png" /></p>
+<p>Using the power of <code>arrow</code>, we were able to scan 8+mln observations for
+three rules in about 1.5 seconds (YMMV). As we can see from the results,
+there is one unexpected value, lets quickly investigate using the
+<code>filter_fails()</code> function, which filters a dataset for the failed rule
+matches</p>
+<pre class="r"><code>res |&gt;
+  filter_fails(ds) |&gt; 
+  # only select a couple of variables for brevity
+  dplyr::select(tpep_pickup_datetime, tpep_dropoff_datetime, trip_distance)
+#&gt; # A tibble: 1 × 3
+#&gt;   tpep_pickup_datetime tpep_dropoff_datetime trip_distance
+#&gt;   &lt;dttm&gt;               &lt;dttm&gt;                        &lt;dbl&gt;
+#&gt; 1 2018-01-30 12:41:02  2018-01-30 12:42:09         189484.</code></pre>
+<p>As we can see, this is probably a data error (a trip distance of 190k
+miles in 1 minute seems - ehm stellar…).</p>
+</div>
+</div>
+<div id="using-a-dbi-backend" class="section level2">
+<h2>Using a <code>DBI</code> Backend</h2>
+<p>If you have a <code>SQLite</code> or <code>duckdb</code> database, you can use the package
+like this</p>
+<pre class="r"><code>library(DBI)
+library(dplyr)
+
+# connect to a duckdb database
+con &lt;- dbConnect(duckdb::duckdb(&quot;duckdb-database.duckdb&quot;))
+# for demo purposes write the data once
+dbWriteTable(con, &quot;mtcars&quot;, mtcars)
+
+# create a tbl connection, which can be used in the checks
+tbl &lt;- tbl(con, &quot;mtcars&quot;)
+
+# create rules
+rules &lt;- ruleset(
+  rule(mpg &gt; 10 &amp; mpg &lt; 30),
+  rule(cyl %in% c(4, 8)),
+  rule(vs %in% c(0, 1), allow_na = TRUE)
+)
+
+# check rules
+res &lt;- check_data(tbl, rules)
+res
+#&gt; # A tibble: 3 × 10
+#&gt;   name          expr                allow_na negate tests  pass  fail warn  error time          
+#&gt;   &lt;chr&gt;         &lt;chr&gt;               &lt;lgl&gt;    &lt;lgl&gt;  &lt;dbl&gt; &lt;dbl&gt; &lt;dbl&gt; &lt;chr&gt; &lt;chr&gt; &lt;drtn&gt;        
+#&gt; 1 Rule for: mpg mpg &gt; 10 &amp; mpg &lt; 30 FALSE    FALSE     32    28     4 &quot;&quot;    &quot;&quot;    3.5227668 secs
+#&gt; 2 Rule for: cyl cyl %in% c(4, 8)    FALSE    FALSE     32    25     7 &quot;&quot;    &quot;&quot;    0.2015200 secs
+#&gt; 3 Rule for: vs  vs %in% c(0, 1)     TRUE     FALSE     32    32     0 &quot;&quot;    &quot;&quot;    0.1898661 secs
+
+filter_fails(res, tbl, per_rule = TRUE)
+#&gt; $`mpg &gt; 10 &amp; mpg &lt; 30`
+#&gt; # A tibble: 4 × 11
+#&gt;     mpg   cyl  disp    hp  drat    wt  qsec    vs    am  gear  carb
+#&gt;   &lt;dbl&gt; &lt;dbl&gt; &lt;dbl&gt; &lt;dbl&gt; &lt;dbl&gt; &lt;dbl&gt; &lt;dbl&gt; &lt;dbl&gt; &lt;dbl&gt; &lt;dbl&gt; &lt;dbl&gt;
+#&gt; 1  32.4     4  78.7    66  4.08 2.2   19.47     1     1     4     1
+#&gt; 2  30.4     4  75.7    52  4.93 1.615 18.52     1     1     4     2
+#&gt; 3  33.9     4  71.1    65  4.22 1.835 19.9      1     1     4     1
+#&gt; 4  30.4     4  95.1   113  3.77 1.513 16.9      1     1     5     2
+#&gt; 
+#&gt; $`cyl %in% c(4, 8)`
+#&gt; # A tibble: 7 × 11
+#&gt;     mpg   cyl  disp    hp  drat    wt  qsec    vs    am  gear  carb
+#&gt;   &lt;dbl&gt; &lt;dbl&gt; &lt;dbl&gt; &lt;dbl&gt; &lt;dbl&gt; &lt;dbl&gt; &lt;dbl&gt; &lt;dbl&gt; &lt;dbl&gt; &lt;dbl&gt; &lt;dbl&gt;
+#&gt; 1  21       6 160     110  3.9  2.62  16.46     0     1     4     4
+#&gt; 2  21       6 160     110  3.9  2.875 17.02     0     1     4     4
+#&gt; 3  21.4     6 258     110  3.08 3.215 19.44     1     0     3     1
+#&gt; 4  18.1     6 225     105  2.76 3.46  20.22     1     0     3     1
+#&gt; 5  19.2     6 167.6   123  3.92 3.44  18.3      1     0     4     4
+#&gt; 6  17.8     6 167.6   123  3.92 3.44  18.9      1     0     4     4
+#&gt; 7  19.7     6 145     175  3.62 2.77  15.5      0     1     5     6
+
+# lastly disconnect from the database again
+dbDisconnect(con, shutdown = TRUE)</code></pre>
+</div>
